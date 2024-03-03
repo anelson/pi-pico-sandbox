@@ -1,0 +1,25 @@
+session_name: pi-pico-sandbox
+start_directory: ./
+windows:
+  - window_name: editor
+    focus: true
+    panes:
+    - shell_command:
+        - nvim
+      focus: true
+  - window_name: rust shell
+    panes:
+    - pane
+  - window_name: gdb shell
+    layout: even-vertical
+    panes:
+    - pane
+    - pane
+  - window_name: pico examples
+    shell_command_before: cd ~/sourcecode/pico-examples/build
+    panes:
+    - pane
+  - window_name: minicom
+    panes:
+    - shell_command:
+      - echo "Command to connect to UART:" && echo "minicom -b 115200 -o -D /dev/ttyACM0"
