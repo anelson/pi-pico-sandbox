@@ -21,3 +21,11 @@ interface is definitely a deal-breaker.
 
 The LED blink is a stupid, small thing, but I fear it's a sign of more widespread indifference to this platform.  If
 that doesn't work, what about a TCP/IP stack?  An MQTT client?
+
+## New Embassy Project
+
+`cargo generate` template at https://github.com/bentwire/embassy-rp2040-template.  The docs for the Rust Pico HAL also
+have a `cargo generate` template for their libraries, but I'm interested in playing w/ that async hotness so I'm taking
+the hard path.
+
+
