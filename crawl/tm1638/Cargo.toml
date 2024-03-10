@@ -4,7 +4,6 @@ name = "tm1638"
 version = "0.1.0"
 authors = ["Adam Nelson <anelson@users.noreply.github.com>"]
 resolver = "2"
-#rust-version = "1.76"
 
 [dependencies]
 cyw43 = { version = "0.1.0",  features = ["defmt", "firmware-logs"] }
