@@ -23,7 +23,29 @@ async fn main(_spawner: Spawner) {
     let mut tm1638 = tm1638::Tm1638::new(p.PIN_6, p.PIN_7, p.PIN_8);
     tm1638.init().await;
 
-    info!("Hello World!");
+    let mut led_state = false;
 
-    tm1638::foo().await;
+    loop {
+        let new_mask = if led_state {
+            // Turn all segment displays and LEDs off
+            led_state = false;
+            0x00
+        } else {
+            // Turn everything on
+            led_state = true;
+            0xff
+        };
+
+        for display in 0..8 {
+            tm1638.set_display_mask(display, new_mask).await;
+        }
+
+        Timer::after_millis(500).await;
+
+        for led in 0..8 {
+            tm1638.set_led_mask(led, new_mask).await;
+        }
+
+        Timer::after_millis(500).await;
+    }
 }
