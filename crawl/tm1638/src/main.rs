@@ -23,39 +23,31 @@ async fn main(_spawner: Spawner) {
     let mut tm1638 = tm1638::Tm1638::new(p.PIN_6, p.PIN_7, p.PIN_8);
     tm1638.init().await;
 
-    let mut led_state = false;
+    debug!("here we go!");
 
     loop {
-        tm1638.deactivate_display().await;
+        tm1638.blank_display().await;
+        let keys = tm1638.read_keys().await;
 
-        let new_mask = if led_state {
-            // Turn all segment displays and LEDs off
-            led_state = false;
-            0x00
-        } else {
-            // Turn everything on
-            led_state = true;
-            0xff
-        };
+        if keys.any_pressed() {
+            // Go apeshit
+            tm1638.activate_display(0x07).await;
 
-        tm1638.activate_display(0x01).await;
+            for (col, row) in keys {
+                let col: u8 = col.to_column_number();
+                let row: u8 = row.to_row_number();
 
-        for display in 0..8 {
-            tm1638.set_display_mask(display, new_mask).await;
+                debug!("col {=u8}, row {=u8}", col, row);
+
+                // Set the display corresponding to the row to a mask corresponding to the column
+                // number
+                tm1638.set_display_mask(row - 1, col).await;
+
+                // Light the LED as well
+                tm1638.set_led_mask(row - 1, 0xff).await;
+            }
         }
 
-        Timer::after_millis(500).await;
-
-        for led in 0..8 {
-            tm1638.set_led_mask(led, new_mask).await;
-        }
-
-        Timer::after_millis(500).await;
-
-        // Gradually increase the brightness
-        for brightness in 2..=7 {
-            tm1638.activate_display(brightness).await;
-            Timer::after_millis(500).await;
-        }
+        Timer::after_millis(10).await;
     }
 }
