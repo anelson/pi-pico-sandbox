@@ -26,6 +26,8 @@ async fn main(_spawner: Spawner) {
     let mut led_state = false;
 
     loop {
+        tm1638.deactivate_display().await;
+
         let new_mask = if led_state {
             // Turn all segment displays and LEDs off
             led_state = false;
@@ -35,6 +37,8 @@ async fn main(_spawner: Spawner) {
             led_state = true;
             0xff
         };
+
+        tm1638.activate_display(0x01).await;
 
         for display in 0..8 {
             tm1638.set_display_mask(display, new_mask).await;
@@ -47,5 +51,11 @@ async fn main(_spawner: Spawner) {
         }
 
         Timer::after_millis(500).await;
+
+        // Gradually increase the brightness
+        for brightness in 2..=7 {
+            tm1638.activate_display(brightness).await;
+            Timer::after_millis(500).await;
+        }
     }
 }

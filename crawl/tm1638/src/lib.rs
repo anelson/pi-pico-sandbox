@@ -51,7 +51,7 @@ impl<'a, StrobePin: gpio::Pin, ClockPin: gpio::Pin, DioPin: gpio::Pin>
             strobe: gpio::Output::new(strobe, gpio::Level::High),
             clock: gpio::Output::new(clock, gpio::Level::Low),
             dio: gpio::Flex::new(dio),
-            inc_addressing_mode: true,
+            inc_addressing_mode: false,
         }
     }
 
@@ -63,14 +63,8 @@ impl<'a, StrobePin: gpio::Pin, ClockPin: gpio::Pin, DioPin: gpio::Pin>
         // Set the pins in their initial conditions, corresponding to an idle state
         self.dio.set_low();
 
-        // XXX DEBUG: to make the logic analyzer output easier to follow, pause here before sending
-        // commands
-        Timer::after_secs(1).await;
-
         // Put the controller in incremental addressing mode and initialize all 7-segment displays to be blank
-        self.apply_command(Command::SetIncrementalDisplayAddressing)
-            .await;
-        self.inc_addressing_mode = true;
+        self.set_incrementing_addressing().await;
 
         self.apply_command(Command::WriteMultipleChars {
             start_display_number: 0,
@@ -78,7 +72,7 @@ impl<'a, StrobePin: gpio::Pin, ClockPin: gpio::Pin, DioPin: gpio::Pin>
         })
         .await;
 
-        // Activate the display with a reasonable defautl brightness
+        // Activate the display with a reasonable default brightness
         self.activate_display(0x02).await;
     }
 
@@ -105,8 +99,8 @@ impl<'a, StrobePin: gpio::Pin, ClockPin: gpio::Pin, DioPin: gpio::Pin>
     /// This uses the relative addressing mode of the TM1638.  To replace the entire contents of
     /// the display use `[XXX]`.
     pub async fn set_display_mask(&mut self, address: u8, mask: u8) {
-        // TODO: not clear if this has to be set each time.  FML.
-        self.apply_command(Command::SetFixedDisplayAddressing).await;
+        self.set_fixed_addressing().await;
+
         self.apply_command(Command::WriteSingleChar {
             display_number: address,
             segment_mask: mask,
@@ -114,14 +108,42 @@ impl<'a, StrobePin: gpio::Pin, ClockPin: gpio::Pin, DioPin: gpio::Pin>
         .await;
     }
 
+    /// Set the mask for an LED output for a specific LED by `address`.
+    ///
+    /// `0` is the left-most LED on the board I have; `7` is the right-most.
+    ///
+    /// `mask` controls the SEGMENT9 and SEGMENT10 outputs that for the GRID pin correspondign to
+    /// `address`.  Therefore only the two least significant bits of `mask` are used.  I have read
+    /// that some boards with the TM1638 chip have multi-color LEDs in which case the mask might be
+    /// used to control the color.  On my board the LEDs are all red so this isn't applicable.
     pub async fn set_led_mask(&mut self, address: u8, mask: u8) {
-        // TODO: not clear if this has to be set each time.  FML.
-        self.apply_command(Command::SetFixedDisplayAddressing).await;
+        self.set_fixed_addressing().await;
+
         self.apply_command(Command::WriteLed {
             led_number: address,
             mask,
         })
         .await;
+    }
+
+    /// Switch the chip to fixed addressing mode, so all write operations to whatever the current
+    /// address is, with no automatic incrementing of the address.
+    async fn set_fixed_addressing(&mut self) {
+        if self.inc_addressing_mode {
+            self.apply_command(Command::SetFixedDisplayAddressing).await;
+            self.inc_addressing_mode = false;
+        }
+    }
+
+    /// Switch the chip to incremental addressing mode, so each byte written will automatically
+    /// increment the current address by one byte, which makes it much more convenient to write
+    /// to multiple LEDs and 7-seg displays.
+    async fn set_incrementing_addressing(&mut self) {
+        if !self.inc_addressing_mode {
+            self.apply_command(Command::SetIncrementalDisplayAddressing)
+                .await;
+            self.inc_addressing_mode = false;
+        }
     }
 
     async fn apply_command<'c>(&mut self, command: Command<'c>) {
