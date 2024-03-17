@@ -139,7 +139,10 @@ impl<'a, StrobePin: gpio::Pin, ClockPin: gpio::Pin, DioPin: gpio::Pin>
         self.apply_read_command(ReadCommand::ReadKeys, &mut buffer)
             .await;
 
-        trace!("keys = {:?}", buffer);
+        // XXX: DEBUG ONLY
+        if buffer.iter().any(|b| *b != 0) {
+            debug!("keys = {:?}", buffer);
+        }
 
         Keys::new(buffer)
     }
@@ -414,12 +417,19 @@ impl KeyColumn {
 
     /// Given the nibble that corresponds to some row, read the bit that corresponds to this column
     fn extract_value_from_row_nibble(&self, nibble: u8) -> bool {
+        nibble & self.nibble_mask() != 0
+    }
+
+    fn nibble_mask(&self) -> u8 {
         // The representation of column bits in each nibble is a bit...odd.
-        // Column K3 is in bit 3, K2 in bit 2, K1 in bit 1, and bit 0 is unused
+        // Column K3 is in bit 0, K2 in bit 1, K1 in bit 2, and bit 3 is unused
         // Note that the columns are numbered from 1, and the bits from 0, and because of this, the
         // column number (1 based) equals its corresponding bit number (0 based).
-        let column: u8 = self.to_column_number();
-        nibble & (1 << column) != 0
+        match self {
+            Self::K1 => 0b0100,
+            Self::K2 => 0b0010,
+            Self::K3 => 0b0001,
+        }
     }
 
     /// Construct a column from a (1-based) column number

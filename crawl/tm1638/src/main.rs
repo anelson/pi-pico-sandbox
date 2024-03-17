@@ -33,7 +33,11 @@ async fn main(_spawner: Spawner) {
             // Go apeshit
             tm1638.activate_display(0x07).await;
 
-            for (col, row) in keys {
+            for (col, row) in keys.clone() {
+                if !keys.is_pressed(col, row) {
+                    error!("BUG: This column and row is not pressed!");
+                }
+
                 let col: u8 = col.to_column_number();
                 let row: u8 = row.to_row_number();
 
