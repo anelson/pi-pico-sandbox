@@ -1,11 +1,17 @@
-[package]
-edition = "2021"
-name = "tm1638"
-version = "0.1.0"
-authors = ["Adam Nelson <anelson@users.noreply.github.com>"]
+[workspace]
+members = [
+    "tm1638",
+     "examples/hello"
+]
+default-members = ["examples/hello"]
 resolver = "2"
 
-[dependencies]
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+authors = ["Adam Nelson <anelson@users.noreply.github.com>"]
+
+[workspace.dependencies]
 cyw43 = { version = "0.1.0",  features = ["defmt", "firmware-logs"] }
 cyw43-pio = { version = "0.1.0",  features = ["defmt", "overclock"] }
 embassy-embedded-hal = { version = "0.1.0",  features = ["defmt"] }
