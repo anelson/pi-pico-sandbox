@@ -17,10 +17,11 @@ async fn main(_spawner: Spawner) {
 
     // Instantiate the TM1638 interface using a bit-banging implementation of the TM1638 bus
     // interface implemented using the `embassy-rp` HAL and the `embassy-time` timer.
-    let pins = tm1638::EmbassyRpPins::new(p.PIN_6, p.PIN_7, p.PIN_8);
-    let driver =
-        tm1638::EmbassyRpBusDriver::<_, _, _, tm1638::EmbassyTimeTimer>::new(pins).unwrap();
-    let mut tm1638 = tm1638::Tm1638::new(driver);
+    let mut tm1638 = tm1638::Tm1638::builder()
+        .with_embassy_timer()
+        .with_embassy_rp_pins(p.PIN_6, p.PIN_7, p.PIN_8)
+        .build()
+        .unwrap();
     tm1638.init().await.unwrap();
 
     debug!("Hello!  Press one of the buttons on the board!");

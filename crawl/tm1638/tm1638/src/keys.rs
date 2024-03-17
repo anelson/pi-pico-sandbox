@@ -1,7 +1,7 @@
 /// The number of bytes used to represent the state of the keys on the board
 pub const KEY_BYTES: usize = 4;
 
-/// The state of the keys on the TM1638 board in response to a call to [`Tm1338::read_keys`]
+/// The state of the keys on the TM1638 board in response to a call to [`crate::Tm1638::read_keys`]
 ///
 /// According to the datasheet, the controller supports a keypad arraged in a 3x8 matrix.  This
 /// struct makes it more egonomic to work with that matrix.
@@ -14,7 +14,7 @@ pub const KEY_BYTES: usize = 4;
 /// - You can use [`Self::any_pressed`] if you just want to know if any key was pressed without
 /// knowing more.  That might be useful for waking up from sleep and turning on a display, for
 /// example.
-/// - The struct implements [`std::iter::Iterator`] therefore it can be used in a `for` loop to
+/// - The struct implements [`Iterator`] therefore it can be used in a `for` loop to
 /// iterate over all pressed keys in the struct.  This is probably the most generally useful.
 #[derive(Clone)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]

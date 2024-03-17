@@ -3,6 +3,7 @@
 mod bus;
 mod keys;
 
+use core::marker::PhantomData;
 use core::num::NonZeroU8;
 
 pub use bus::*;
@@ -12,9 +13,122 @@ const INITIAL_DISPLAY_STATE: &[u8; 16] = &[
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
 
-pub struct Tm1638<Driver: BusDriver> {
+pub struct Tm1638Builder;
+
+impl Tm1638Builder {
+    /// Use an arbitrary [`BusDriver`] implementation; nothing more needs to be specified!
+    pub fn with_bus_driver<D: BusDriver>(self, driver: D) -> Tm1638Builder3<D> {
+        Tm1638Builder3 { driver }
+    }
+
+    /// Use an arbitrary [`Timer`] implementation with this bus driver.
+    pub fn with_timer<T: Timer>(self) -> Tm1638Builder1<T> {
+        Tm1638Builder1 {
+            _timer: Default::default(),
+        }
+    }
+
+    #[cfg(feature = "embassy-time")]
+    /// Use the [`Timer`] implementation built using `embassy-time`
+    pub fn with_embassy_timer(self) -> Tm1638Builder1<EmbassyTimeTimer> {
+        self.with_timer::<EmbassyTimeTimer>()
+    }
+}
+
+pub struct Tm1638Builder1<T: Timer> {
+    _timer: PhantomData<T>,
+}
+
+impl<T: Timer> Tm1638Builder1<T> {
+    /// Use the bit-banging driver, with an arbitrary implementation of [`Pins`] specific to your
+    /// target platform
+    pub fn with_bit_banging_driver<P: Pins>(self, pins: P) -> Tm1638Builder2<P, T> {
+        Tm1638Builder2 {
+            _timer: self._timer,
+            pins,
+        }
+    }
+
+    /// Use a bit-banging driver talking to the specified Embassy RP HAL pins
+    #[cfg(feature = "embassy-rp")]
+    pub fn with_embassy_rp_pins<
+        'a,
+        StrobePin: embassy_rp::gpio::Pin,
+        ClockPin: embassy_rp::gpio::Pin,
+        DioPin: embassy_rp::gpio::Pin,
+    >(
+        self,
+        strobe: StrobePin,
+        clock: ClockPin,
+        dio: DioPin,
+    ) -> Tm1638Builder2<EmbassyRpPins<'a, StrobePin, ClockPin, DioPin>, T> {
+        self.with_bit_banging_driver(EmbassyRpPins::new(strobe, clock, dio))
+    }
+}
+
+pub struct Tm1638Builder2<P: Pins, T: Timer> {
+    pins: P,
+    _timer: PhantomData<T>,
+}
+
+impl<P: Pins, T: Timer> Tm1638Builder2<P, T> {
+    /// Construct the [`Tm1638`] instance using the bit-banging driver.
+    ///
+    /// This is fallible if the underling I/O implementation is.
+    pub fn build(self) -> Result<Tm1638<BitBangingBusDriver<P, T>>, P::Error> {
+        let driver = BitBangingBusDriver::new(self.pins)?;
+        Ok(Tm1638::new(driver))
+    }
+}
+
+pub struct Tm1638Builder3<D: BusDriver> {
+    driver: D,
+}
+
+impl<D: BusDriver> Tm1638Builder3<D> {
+    /// Construct the [`Tm1638`] instance using the selected driver.
+    pub fn build(self) -> Tm1638<D> {
+        Tm1638::new(self.driver)
+    }
+}
+
+/// Driver for TM1638 display and switch controllers.
+///
+/// The implementation is generalized over the implementation of the underling bus protocol driver,
+/// behind the [`BusDriver`] trait.  This allows most of the code to remain the same, while
+/// supporting multiple hardware HALs and timer implementations.
+///
+/// The most straightforward way to instantiate this driver is using [`Self::builder`] which
+/// returns a builder type with which you can get easy access to the built-in implementations.
+///
+/// For example, to use the `embassy-time` timer implementation and the `embassy-rp` HAL for
+/// RP2040:
+///
+/// ```
+/// # #[cfg(all(feature = "embassy-time", feature = "embassy-rp"))]
+/// # {
+/// let p = embassy_rp::init(Default::default());
+/// let mut driver = tm1638::Tm1638::builder()
+///     .with_embassy_timer()
+///     .with_embassy_rp_pins(p.PIN_6, p.PIN_7, p.PIN_8)
+///     .build()
+///     .unwrap();
+/// # }
+/// ```
+pub struct Tm1638<Driver> {
     driver: Driver,
     inc_addressing_mode: bool,
+}
+
+impl Tm1638<()> {
+    /// Return a builder pattern implementation to ease some of the type parameter complexity
+    /// around creating the bus driver and timer.
+    ///
+    /// This is not required; you can always instantiate the driver without a builder, but you
+    /// might have to type more angle brackets to do so.
+    pub fn builder() -> Tm1638Builder {
+        Tm1638Builder
+    }
 }
 
 impl<Driver: BusDriver> Tm1638<Driver> {

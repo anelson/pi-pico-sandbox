@@ -41,27 +41,6 @@ pub trait BusDriver {
     async fn send_command_read_data(&mut self, b: u8, data: &mut [u8]) -> Result<(), Self::Error>;
 }
 
-/// The bit-banging bus driver uses this trait to abstract away the very low-level details of
-/// controlling the three pins connected to the TM1638 device.  Other drivers might or might not
-/// need this.
-pub trait Pins {
-    type Error;
-
-    fn set_clk(&mut self, state: bool) -> Result<(), Self::Error>;
-
-    fn set_stb(&mut self, state: bool) -> Result<(), Self::Error>;
-
-    /// Put the DIO pin into output mode (followed by calls to [`Self::set_dio`]
-    fn set_dio_as_output(&mut self) -> Result<(), Self::Error>;
-    fn set_dio(&mut self, state: bool) -> Result<(), Self::Error>;
-
-    /// Put the DIO pin into input mode (followed by calls to [`Self::get_dio`])
-    fn set_dio_as_input(&mut self) -> Result<(), Self::Error>;
-
-    /// Read the state of the DIO pin, returning `true` for high and `false` for low.
-    fn get_dio(&mut self) -> Result<bool, Self::Error>;
-}
-
 /// Abstraction on platform-specific timers to provide a generic way to pause the bus driver
 /// execution in order to implement the TM1638 bus protocol correctly.
 ///
@@ -82,6 +61,27 @@ pub trait Timer {
     async fn wait_twait() {
         Self::wait_clock_tick().await
     }
+}
+
+/// The bit-banging bus driver uses this trait to abstract away the very low-level details of
+/// controlling the three pins connected to the TM1638 device.  Other drivers might or might not
+/// need this.
+pub trait Pins {
+    type Error;
+
+    fn set_clk(&mut self, state: bool) -> Result<(), Self::Error>;
+
+    fn set_stb(&mut self, state: bool) -> Result<(), Self::Error>;
+
+    /// Put the DIO pin into output mode (followed by calls to [`Self::set_dio`]
+    fn set_dio_as_output(&mut self) -> Result<(), Self::Error>;
+    fn set_dio(&mut self, state: bool) -> Result<(), Self::Error>;
+
+    /// Put the DIO pin into input mode (followed by calls to [`Self::get_dio`])
+    fn set_dio_as_input(&mut self) -> Result<(), Self::Error>;
+
+    /// Read the state of the DIO pin, returning `true` for high and `false` for low.
+    fn get_dio(&mut self) -> Result<bool, Self::Error>;
 }
 
 /// Implementation of [`BusDriver`] by bit-banging GPIO pins.
@@ -133,9 +133,9 @@ impl<P: Pins, T: Timer> BitBangingBusDriver<P, T> {
             // matters.
             T::wait_clock_tick().await;
 
-            self.pins.set_clk(true);
+            self.pins.set_clk(true)?;
             T::wait_clock_tick().await;
-            self.pins.set_clk(false);
+            self.pins.set_clk(false)?;
             T::wait_clock_tick().await;
         }
 
@@ -188,11 +188,11 @@ impl<P: Pins, T: Timer> BusDriver for BitBangingBusDriver<P, T> {
         #[cfg(feature = "defmt")]
         defmt::debug_assert!(!data.is_empty());
         self.pins.set_stb(false)?;
-        self.send_byte(b).await;
+        self.send_byte(b).await?;
         for b in data {
             #[cfg(feature = "defmt")]
             defmt::trace!("data byte = {=u8:x}", b);
-            self.send_byte(*b).await;
+            self.send_byte(*b).await?;
         }
         self.pins.set_stb(true)?;
 

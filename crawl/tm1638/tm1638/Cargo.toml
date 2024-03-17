@@ -4,6 +4,9 @@ edition.workspace = true
 version.workspace = true
 authors.workspace = true
 
+[package.metadata.docs.rs]
+features = ["defmt", "embassy-rp", "embassy-time"]
+
 [features]
 default = ["defmt", "embassy-rp", "embassy-time"]
 
