@@ -17,9 +17,9 @@ async fn main(_spawner: Spawner) {
 
     // Instantiate the TM1638 interface using a bit-banging implementation of the TM1638 bus
     // interface implemented using the `embassy-rp` HAL and the `embassy-time` timer.
-    let driver = tm1638::EmbassyRpBusDriver::<_, _, _, tm1638::EmbassyTimeTimer>::new(
-        p.PIN_6, p.PIN_7, p.PIN_8,
-    );
+    let pins = tm1638::EmbassyRpPins::new(p.PIN_6, p.PIN_7, p.PIN_8);
+    let driver =
+        tm1638::EmbassyRpBusDriver::<_, _, _, tm1638::EmbassyTimeTimer>::new(pins).unwrap();
     let mut tm1638 = tm1638::Tm1638::new(driver);
     tm1638.init().await.unwrap();
 
