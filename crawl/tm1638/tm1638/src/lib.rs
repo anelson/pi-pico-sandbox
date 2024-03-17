@@ -5,7 +5,6 @@ use defmt::*;
 use embassy_rp::{self, gpio};
 use embassy_time::{Duration, Timer};
 use embedded_hal_1::digital::OutputPin;
-use {defmt_rtt as _, panic_probe as _};
 
 /// Use a 1uS clock tick to ensure the TM1638 picks up the value
 const CLOCK_TICK: Duration = Duration::from_micros(1);
@@ -124,10 +123,7 @@ impl<'a, StrobePin: gpio::Pin, ClockPin: gpio::Pin, DioPin: gpio::Pin>
         self.apply_read_command(ReadCommand::ReadKeys, &mut buffer)
             .await;
 
-        // XXX: DEBUG ONLY
-        if buffer.iter().any(|b| *b != 0) {
-            debug!("keys = {:?}", buffer);
-        }
+        trace!("keys = {:?}", buffer);
 
         Keys::new(buffer)
     }
@@ -149,7 +145,7 @@ impl<'a, StrobePin: gpio::Pin, ClockPin: gpio::Pin, DioPin: gpio::Pin>
         if !self.inc_addressing_mode {
             self.apply_write_command(WriteCommand::SetIncrementalDisplayAddressing)
                 .await;
-            self.inc_addressing_mode = false;
+            self.inc_addressing_mode = true;
         }
     }
 
@@ -724,4 +720,10 @@ impl ReadCommand {
             }
         }
     }
+}
+
+#[cfg(test)]
+mod test {
+    #[test]
+    fn foo() {}
 }
