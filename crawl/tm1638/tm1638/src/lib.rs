@@ -1,14 +1,12 @@
 #![no_std]
 
 mod bus;
+mod keys;
 
 use core::num::NonZeroU8;
-use defmt::*;
 
 pub use bus::*;
-
-/// The number of bytes used to represent the state of the keys on the board
-const KEY_BYTES: usize = 4;
+pub use keys::*;
 
 const INITIAL_DISPLAY_STATE: &[u8; 16] = &[
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -100,12 +98,13 @@ impl<Driver: BusDriver> Tm1638<Driver> {
 
     /// Read the raw key bitmask from the controller
     pub async fn read_keys(&mut self) -> Result<Keys, Driver::Error> {
-        let mut buffer = [0u8; KEY_BYTES];
+        let mut buffer = [0u8; keys::KEY_BYTES];
 
         self.apply_read_command(ReadCommand::ReadKeys, &mut buffer)
             .await?;
 
-        trace!("keys = {:?}", buffer);
+        #[cfg(feature = "defmt")]
+        defmt::trace!("keys = {:?}", buffer);
 
         Ok(Keys::new(buffer))
     }
@@ -142,7 +141,8 @@ impl<Driver: BusDriver> Tm1638<Driver> {
     ) -> Result<(), Driver::Error> {
         let (command_byte, data_bytes) = command.encode();
 
-        trace!("command byte = {=u8:x}", command_byte);
+        #[cfg(feature = "defmt")]
+        defmt::trace!("command byte = {=u8:x}", command_byte);
 
         if let Some(data_bytes) = data_bytes {
             self.send_command_and_data_bytes(command_byte, data_bytes)
@@ -161,8 +161,10 @@ impl<Driver: BusDriver> Tm1638<Driver> {
     ) -> Result<(), Driver::Error> {
         let (command_byte, read_bytes) = command.encode();
 
-        trace!("command byte = {=u8:x}", command_byte);
+        #[cfg(feature = "defmt")]
+        defmt::trace!("command byte = {=u8:x}", command_byte);
 
+        #[cfg(feature = "defmt")]
         defmt::debug_assert!(read_bytes.get() as usize <= read_buffer.len());
 
         // Limit the read buffer to just the range needed to store these results
@@ -197,270 +199,6 @@ impl<Driver: BusDriver> Tm1638<Driver> {
         read_buffer: &mut [u8],
     ) -> Result<(), Driver::Error> {
         self.driver.send_command_read_data(b, read_buffer).await
-    }
-}
-
-/// The state of the keys on the TM1638 board in response to a call to [`Tm1338::read_keys`]
-///
-/// According to the datasheet, the controller supports a keypad arraged in a 3x8 matrix.  This
-/// struct makes it more egonomic to work with that matrix.
-#[derive(Clone)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub struct Keys([u8; KEY_BYTES]);
-
-impl Keys {
-    fn new(bytes: [u8; KEY_BYTES]) -> Self {
-        Self(bytes)
-    }
-
-    /// Quickly check if *any* keys are pressed
-    pub fn any_pressed(&self) -> bool {
-        self.0.iter().any(|byte| *byte != 0)
-    }
-
-    /// Test if the given key (identified by its column and row) is pressed
-    pub fn is_pressed(&self, col: KeyColumn, row: KeyRow) -> bool {
-        let nibble = row.extract_row_nibble_from_bytes(&self.0);
-        debug!("nibble={=u8}", nibble);
-
-        col.extract_value_from_row_nibble(nibble)
-    }
-
-    /// If at least one key is indicated as pressed, return that key's column and row, and update
-    /// the key state so that key is no longer indicated as pressed.
-    ///
-    /// There are no guarantees regarding the order in which keys are returned in the case of multiple key presses.
-    fn pop_key(&mut self) -> Option<(KeyColumn, KeyRow)> {
-        // Find a non-empty byte, looking only at the bits that correspond to supported columns
-        // (that means that bit 3 and bit 7 (0-based) are ignored; see the data sheet section 8 to
-        // understand why if it's not obvious)
-        if let Some((index, byte)) = self
-            .0
-            .iter_mut()
-            .enumerate()
-            .find(|(_index, byte)| (**byte & 0b0111_0111) != 0)
-        {
-            // we know that this byte is non-zero.  find the least significant bit that is set
-            let set_bit = byte.trailing_zeros();
-
-            if let Some(key_coords) = Self::bit_to_col_and_row(index as u8, set_bit as u8) {
-                // Clear this bit before returning
-                *byte &= !(1 << set_bit);
-
-                Some(key_coords)
-            } else {
-                // This is a bug in the code; it shouldn't be possible that we get an invalid index
-                // and set bit combo.  But handle this gracefully except in debug mode
-                defmt::debug_assert!(
-                    false,
-                    "BUG: index={} set_bit={} is not a valid column and row",
-                    index,
-                    set_bit
-                );
-                None
-            }
-        } else {
-            // No keys are pressed
-            None
-        }
-    }
-
-    fn bit_to_col_and_row(byte_index: u8, bit_index: u8) -> Option<(KeyColumn, KeyRow)> {
-        if let Some(col) = KeyColumn::from_bit_index(bit_index % 4) {
-            if let Some(row) = KeyRow::from_byte_and_bit_index(byte_index, bit_index) {
-                return Some((col, row));
-            }
-        }
-
-        // This is a bug in the caller, it should never happen that we encounter a combination of
-        // byte and bit index that is not valid.  However it's up to the caller to handle that bug.
-        None
-    }
-}
-
-/// Allows to iterate over all pressed keys one at a time.  As keys are yielded from the iterator,
-/// they are cleared from the struct
-impl Iterator for Keys {
-    type Item = (KeyColumn, KeyRow);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.pop_key()
-    }
-}
-
-impl AsRef<[u8; KEY_BYTES]> for Keys {
-    fn as_ref(&self) -> &[u8; KEY_BYTES] {
-        &self.0
-    }
-}
-
-impl AsRef<[u8]> for Keys {
-    fn as_ref(&self) -> &[u8] {
-        &self.0[..]
-    }
-}
-
-/// The columns in the keyboard matrix that the TM1638 scans
-#[derive(Copy, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum KeyColumn {
-    K1,
-    K2,
-    K3,
-}
-
-impl KeyColumn {
-    pub fn to_column_number(self) -> u8 {
-        match self {
-            Self::K1 => 1,
-            Self::K2 => 2,
-            Self::K3 => 3,
-        }
-    }
-
-    /// Given the nibble that corresponds to some row, read the bit that corresponds to this column
-    fn extract_value_from_row_nibble(&self, nibble: u8) -> bool {
-        nibble & self.nibble_mask() != 0
-    }
-
-    fn nibble_mask(&self) -> u8 {
-        // The representation of column bits in each nibble is a bit...odd.
-        // Column K3 is in bit 0, K2 in bit 1, K1 in bit 2, and bit 3 is unused
-        match self {
-            Self::K1 => 0b0100,
-            Self::K2 => 0b0010,
-            Self::K3 => 0b0001,
-        }
-    }
-
-    /// Construct a column from a (1-based) column number
-    fn from_column_number(col: u8) -> Option<Self> {
-        match col {
-            1 => Some(Self::K1),
-            2 => Some(Self::K2),
-            3 => Some(Self::K3),
-            _ => None,
-        }
-    }
-
-    /// Construct a column from a (0-based) bit index indicating which bit in a 4-bit nibble is
-    /// set.
-    ///
-    /// See [`Self::nibble_mask`] for an explanation of the seemingly arbitrary mapping here
-    fn from_bit_index(bit: u8) -> Option<Self> {
-        // `bit` must be referring to bits within a 4-bit nibble
-        defmt::debug_assert!(bit < 4);
-        match bit {
-            0 => Some(Self::K3),
-            1 => Some(Self::K2),
-            2 => Some(Self::K3),
-            _ => None,
-        }
-    }
-}
-
-/// The rows in the keyboard matrix that the TM1638 scans
-#[derive(Copy, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
-pub enum KeyRow {
-    KS1,
-    KS2,
-    KS3,
-    KS4,
-    KS5,
-    KS6,
-    KS7,
-    KS8,
-}
-
-impl KeyRow {
-    pub fn to_row_number(self) -> u8 {
-        match self {
-            Self::KS1 => 1,
-            Self::KS2 => 2,
-            Self::KS3 => 3,
-            Self::KS4 => 4,
-            Self::KS5 => 5,
-            Self::KS6 => 6,
-            Self::KS7 => 7,
-            Self::KS8 => 8,
-        }
-    }
-
-    /// Given the key bytes, extract the 4 bit nibble that corresponds to this row
-    fn extract_row_nibble_from_bytes(&self, keys: &[u8; KEY_BYTES]) -> u8 {
-        // Section 8 in the datasheet has a table showing which nibbles of which bytes correspond
-        // to which rows
-        let row: u8 = self.to_row_number();
-
-        // Each byte contains two rows' of nibbles
-        // But byte indexes are 0 based while row numbers are 1-based
-        let byte = keys[((row - 1) / 2) as usize];
-
-        // Even-numbered rows (1-based) are in the high nibble; odd numbered rows are in the low
-        // nibble
-        if row % 2 == 0 {
-            // Even numbered row
-            byte >> 4
-        } else {
-            // Odd numbered row
-            byte & 0x0f
-        }
-    }
-
-    /// Construct a row from a (1-based) row number
-    fn from_row_number(col: u8) -> Option<Self> {
-        match col {
-            1 => Some(Self::KS1),
-            2 => Some(Self::KS2),
-            3 => Some(Self::KS3),
-            4 => Some(Self::KS4),
-            5 => Some(Self::KS5),
-            6 => Some(Self::KS6),
-            7 => Some(Self::KS7),
-            8 => Some(Self::KS8),
-            _ => None,
-        }
-    }
-
-    /// Construct a row from a 0-based byte index and a 0-based bit index.
-    ///
-    /// This determines what row contains the key whose bit is located as the given 0-based byte
-    /// and bit index.
-    ///
-    /// The section 8 (VIII) in the TM1638 data sheet has a table which makes this clear.
-    fn from_byte_and_bit_index(byte: u8, bit: u8) -> Option<Self> {
-        match byte {
-            0 => {
-                if bit < 4 {
-                    Some(Self::KS1)
-                } else {
-                    Some(Self::KS2)
-                }
-            }
-            1 => {
-                if bit < 4 {
-                    Some(Self::KS3)
-                } else {
-                    Some(Self::KS4)
-                }
-            }
-            2 => {
-                if bit < 4 {
-                    Some(Self::KS5)
-                } else {
-                    Some(Self::KS6)
-                }
-            }
-            3 => {
-                if bit < 4 {
-                    Some(Self::KS7)
-                } else {
-                    Some(Self::KS8)
-                }
-            }
-            _ => None,
-        }
     }
 }
 
@@ -548,6 +286,7 @@ impl<'a> WriteCommand<'a> {
                 // The lowest three bits indicate the brightness.
                 //
                 // See 5.3 in the data sheet
+                #[cfg(feature = "defmt")]
                 defmt::debug_assert!(*brightness < 0b1000);
                 let brightness = brightness & 0b0000_0111;
 
@@ -573,6 +312,7 @@ impl<'a> WriteCommand<'a> {
                 // The 7 segments displays are at odd numbered offsets (ie, first LED is at
                 // byte 1, second display is at byte 3).  This is because the LEDs and the
                 // 7-segment displays share the same address range
+                #[cfg(feature = "defmt")]
                 defmt::debug_assert!(*led_number < 0b1_0000);
                 (
                     0b1100_0000 | (((led_number << 1) + 1) & 0b0000_1111),
@@ -590,6 +330,7 @@ impl<'a> WriteCommand<'a> {
                 // The 7 segments displays are at even numbered offsets (ie, first display is at
                 // byte 0, second display is at byte 2).  The odd numbered offsets set the
                 // SEGMENT9 and SEGMENT10 pins which control the LEDs on the board.
+                #[cfg(feature = "defmt")]
                 defmt::debug_assert!(*display_number < 0b1_0000);
                 (
                     0b1100_0000 | ((display_number << 1) & 0b0000_1111),
@@ -603,7 +344,9 @@ impl<'a> WriteCommand<'a> {
                 // This works just like the `WriteSingleChar` command, except we assume the
                 // controller is in incremental addressing mode, and send multiple bytes after the
                 // address command
+                #[cfg(feature = "defmt")]
                 defmt::debug_assert!(*start_display_number < 0b1_0000);
+                #[cfg(feature = "defmt")]
                 defmt::debug_assert!(*start_display_number as usize + segment_masks.len() <= 16);
                 (
                     0b1100_0000 | (start_display_number & 0b0000_1111),
@@ -613,6 +356,7 @@ impl<'a> WriteCommand<'a> {
         }
     }
 }
+
 /// Represents possible read commands sent to the TM1638 which read data from the controller
 enum ReadCommand {
     /// Request the controller to send four bytes of key scanning data reflecting current state of
@@ -636,7 +380,8 @@ impl ReadCommand {
                 // SHITTY: `unwrap` on `Option` isn't yet a const fn in stable Rust as of this
                 // writing, so `unsafe` has to be used here.  It's not actually unsafe since we can
                 // clearly see that `4` is not `0`.
-                const KEY_BYTES: NonZeroU8 = unsafe { NonZeroU8::new_unchecked(4) };
+                const KEY_BYTES: NonZeroU8 =
+                    unsafe { NonZeroU8::new_unchecked(keys::KEY_BYTES as u8) };
 
                 (0b0100_0010, KEY_BYTES)
             }

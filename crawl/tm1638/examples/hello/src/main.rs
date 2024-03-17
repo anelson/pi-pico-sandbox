@@ -26,12 +26,21 @@ async fn main(_spawner: Spawner) {
     debug!("Hello!  Press one of the buttons on the board!");
 
     loop {
-        tm1638.blank_display().await.unwrap();
         let keys = tm1638.read_keys().await.unwrap();
 
         if keys.any_pressed() {
             // Go apeshit
             tm1638.activate_display(0x07).await.unwrap();
+
+            let mut bitmask = keys.rows_bitmask();
+
+            for row in 0..8 {
+                // Illuminate the LEDs for any rows that have a pressed key in them
+                // On the TM1638 board I have, each of the 8 switches is wired into a different row
+                // so this works well.
+                tm1638.set_led_mask(row, bitmask & 0x01).await.unwrap();
+                bitmask >>= 1;
+            }
 
             for (col, row) in keys.clone() {
                 // Sanity check the result, to make sure the enumeration of pressed keys agrees
@@ -47,10 +56,7 @@ async fn main(_spawner: Spawner) {
 
                 // Set the display corresponding to the row to a mask corresponding to the column
                 // number
-                tm1638.set_display_mask(row - 1, col).await.unwrap();
-
-                // Light the LED as well
-                tm1638.set_led_mask(row - 1, 0xff).await.unwrap();
+                //tm1638.set_display_mask(row - 1, col).await.unwrap();
             }
         }
 
