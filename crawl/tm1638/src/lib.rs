@@ -17,21 +17,6 @@ const TWAIT: Duration = Duration::from_micros(1);
 /// The number of bytes used to represent the state of the keys on the board
 const KEY_BYTES: usize = 4;
 
-/// Incremental write
-const TM_WRITE_INC: u8 = 0x40;
-/// leftmost segment Address C0 C2 C4 C6 C8 CA CC CE
-const TM_SEG_ADR: u8 = 0xC0;
-/// Start up device
-const TM_ACTIVATE: u8 = 0x8F;
-
-/// Brightness address
-const TM_BRIGHT_ADR: u8 = 0x88;
-
-/// Brightness mask
-const TM_BRIGHT_MASK: u8 = 0x07;
-/// Brightness can be 0x00 to 0x07 , 0x00 is least bright
-const TM_DEFAULT_BRIGHTNESS: u8 = 0x02;
-
 const INITIAL_DISPLAY_STATE: &[u8; 16] = &[
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
@@ -320,11 +305,15 @@ impl Keys {
     /// Test if the given key (identified by its column and row) is pressed
     pub fn is_pressed(&self, col: KeyColumn, row: KeyRow) -> bool {
         let nibble = row.extract_row_nibble_from_bytes(&self.0);
+        debug!("nibble={=u8}", nibble);
+
         col.extract_value_from_row_nibble(nibble)
     }
 
     /// If at least one key is indicated as pressed, return that key's column and row, and update
-    /// the key state so that key is no longer indicated as pressed
+    /// the key state so that key is no longer indicated as pressed.
+    ///
+    /// There are no guarantees regarding the order in which keys are returned in the case of multiple key presses.
     fn pop_key(&mut self) -> Option<(KeyColumn, KeyRow)> {
         // Find a non-empty byte, looking only at the bits that correspond to supported columns
         // (that means that bit 3 and bit 7 (0-based) are ignored; see the data sheet section 8 to
@@ -361,17 +350,14 @@ impl Keys {
     }
 
     fn bit_to_col_and_row(byte_index: u8, bit_index: u8) -> Option<(KeyColumn, KeyRow)> {
-        let row = byte_index * 2 + if bit_index > 3 { 1 } else { 0 };
-        let col = bit_index % 4;
-
-        // Both row and column computed above are 0-based.  Convert to 1-based to construct the
-        // values
-        if let Some(col) = KeyColumn::from_column_number(col + 1) {
-            if let Some(row) = KeyRow::from_row_number(row + 1) {
+        if let Some(col) = KeyColumn::from_bit_index(bit_index % 4) {
+            if let Some(row) = KeyRow::from_byte_and_bit_index(byte_index, bit_index) {
                 return Some((col, row));
             }
         }
 
+        // This is a bug in the caller, it should never happen that we encounter a combination of
+        // byte and bit index that is not valid.  However it's up to the caller to handle that bug.
         None
     }
 }
@@ -423,8 +409,6 @@ impl KeyColumn {
     fn nibble_mask(&self) -> u8 {
         // The representation of column bits in each nibble is a bit...odd.
         // Column K3 is in bit 0, K2 in bit 1, K1 in bit 2, and bit 3 is unused
-        // Note that the columns are numbered from 1, and the bits from 0, and because of this, the
-        // column number (1 based) equals its corresponding bit number (0 based).
         match self {
             Self::K1 => 0b0100,
             Self::K2 => 0b0010,
@@ -438,6 +422,21 @@ impl KeyColumn {
             1 => Some(Self::K1),
             2 => Some(Self::K2),
             3 => Some(Self::K3),
+            _ => None,
+        }
+    }
+
+    /// Construct a column from a (0-based) bit index indicating which bit in a 4-bit nibble is
+    /// set.
+    ///
+    /// See [`Self::nibble_mask`] for an explanation of the seemingly arbitrary mapping here
+    fn from_bit_index(bit: u8) -> Option<Self> {
+        // `bit` must be referring to bits within a 4-bit nibble
+        defmt::debug_assert!(bit < 4);
+        match bit {
+            0 => Some(Self::K3),
+            1 => Some(Self::K2),
+            2 => Some(Self::K3),
             _ => None,
         }
     }
@@ -477,7 +476,8 @@ impl KeyRow {
         let row: u8 = self.to_row_number();
 
         // Each byte contains two rows' of nibbles
-        let byte = keys[(row / 4) as usize];
+        // But byte indexes are 0 based while row numbers are 1-based
+        let byte = keys[((row - 1) / 2) as usize];
 
         // Even-numbered rows (1-based) are in the high nibble; odd numbered rows are in the low
         // nibble
@@ -501,6 +501,46 @@ impl KeyRow {
             6 => Some(Self::KS6),
             7 => Some(Self::KS7),
             8 => Some(Self::KS8),
+            _ => None,
+        }
+    }
+
+    /// Construct a row from a 0-based byte index and a 0-based bit index.
+    ///
+    /// This determines what row contains the key whose bit is located as the given 0-based byte
+    /// and bit index.
+    ///
+    /// The section 8 (VIII) in the TM1638 data sheet has a table which makes this clear.
+    fn from_byte_and_bit_index(byte: u8, bit: u8) -> Option<Self> {
+        match byte {
+            0 => {
+                if bit < 4 {
+                    Some(Self::KS1)
+                } else {
+                    Some(Self::KS2)
+                }
+            }
+            1 => {
+                if bit < 4 {
+                    Some(Self::KS3)
+                } else {
+                    Some(Self::KS4)
+                }
+            }
+            2 => {
+                if bit < 4 {
+                    Some(Self::KS5)
+                } else {
+                    Some(Self::KS6)
+                }
+            }
+            3 => {
+                if bit < 4 {
+                    Some(Self::KS7)
+                } else {
+                    Some(Self::KS8)
+                }
+            }
             _ => None,
         }
     }
