@@ -1,17 +1,11 @@
 #![no_std]
 
+mod bus;
+
 use core::num::NonZeroU8;
 use defmt::*;
-use embassy_rp::{self, gpio};
-use embassy_time::{Duration, Timer};
-use embedded_hal_1::digital::OutputPin;
 
-/// Use a 1uS clock tick to ensure the TM1638 picks up the value
-const CLOCK_TICK: Duration = Duration::from_micros(1);
-
-/// The interval to wait after sending the button read command, before reading data
-/// Corresponds to tWAIT in section 12 of the datasheet, under Timing Characteristics.
-const TWAIT: Duration = Duration::from_micros(1);
+pub use bus::*;
 
 /// The number of bytes used to represent the state of the keys on the board
 const KEY_BYTES: usize = 4;
@@ -20,63 +14,51 @@ const INITIAL_DISPLAY_STATE: &[u8; 16] = &[
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
 
-pub struct Tm1638<'a, StrobePin: gpio::Pin, ClockPin: gpio::Pin, DioPin: gpio::Pin> {
-    strobe: gpio::Output<'a, StrobePin>,
-    clock: gpio::Output<'a, ClockPin>,
-    dio: gpio::Flex<'a, DioPin>,
+pub struct Tm1638<Driver: BusDriver> {
+    driver: Driver,
     inc_addressing_mode: bool,
 }
 
-impl<'a, StrobePin: gpio::Pin, ClockPin: gpio::Pin, DioPin: gpio::Pin>
-    Tm1638<'a, StrobePin, ClockPin, DioPin>
-{
-    pub fn new(strobe: StrobePin, clock: ClockPin, dio: DioPin) -> Self {
+impl<Driver: BusDriver> Tm1638<Driver> {
+    pub fn new(driver: Driver) -> Self {
         Self {
-            strobe: gpio::Output::new(strobe, gpio::Level::High),
-            clock: gpio::Output::new(clock, gpio::Level::Low),
-            dio: gpio::Flex::new(dio),
+            driver,
             inc_addressing_mode: false,
         }
     }
 
     /// Reset the TM1638 state, blanking all of the LEDs
-    pub async fn init(&mut self) {
-        // Initially the DIO pin is for output, except when scanning for key presses
-        self.dio.set_as_output();
-
-        // Set the pins in their initial conditions, corresponding to an idle state
-        self.dio.set_low();
-
-        self.blank_display().await;
+    pub async fn init(&mut self) -> Result<(), Driver::Error> {
+        self.blank_display().await?;
 
         // Activate the display with a reasonable default brightness
-        self.activate_display(0x02).await;
+        self.activate_display(0x02).await
     }
 
     /// Blank the display state, including all 7 seg displays and LEDs
-    pub async fn blank_display(&mut self) {
+    pub async fn blank_display(&mut self) -> Result<(), Driver::Error> {
         // Put the controller in incremental addressing mode and initialize all 7-segment displays to be blank
-        self.set_incrementing_addressing().await;
+        self.set_incrementing_addressing().await?;
 
         self.apply_write_command(WriteCommand::WriteMultipleChars {
             start_display_number: 0,
             segment_masks: INITIAL_DISPLAY_STATE,
         })
-        .await;
+        .await
     }
 
     /// Activate or deactivate the display on the board.
     ///
     /// The brightness is a value from 0 (lowest brightness) to 7 (highest brightness)
-    pub async fn activate_display(&mut self, brightness: u8) {
+    pub async fn activate_display(&mut self, brightness: u8) -> Result<(), Driver::Error> {
         self.apply_write_command(WriteCommand::ActivateDisplay { brightness })
-            .await;
+            .await
     }
 
     /// Deactivate the display
-    pub async fn deactivate_display(&mut self) {
+    pub async fn deactivate_display(&mut self) -> Result<(), Driver::Error> {
         self.apply_write_command(WriteCommand::DeactivateDisplay)
-            .await;
+            .await
     }
 
     /// Set a specific 7-segment display identified by `address` (`0` is the left-most display, max
@@ -88,14 +70,14 @@ impl<'a, StrobePin: gpio::Pin, ClockPin: gpio::Pin, DioPin: gpio::Pin>
     ///
     /// This uses the relative addressing mode of the TM1638.  To replace the entire contents of
     /// the display use `[XXX]`.
-    pub async fn set_display_mask(&mut self, address: u8, mask: u8) {
-        self.set_fixed_addressing().await;
+    pub async fn set_display_mask(&mut self, address: u8, mask: u8) -> Result<(), Driver::Error> {
+        self.set_fixed_addressing().await?;
 
         self.apply_write_command(WriteCommand::WriteSingleChar {
             display_number: address,
             segment_mask: mask,
         })
-        .await;
+        .await
     }
 
     /// Set the mask for an LED output for a specific LED by `address`.
@@ -106,64 +88,77 @@ impl<'a, StrobePin: gpio::Pin, ClockPin: gpio::Pin, DioPin: gpio::Pin>
     /// `address`.  Therefore only the two least significant bits of `mask` are used.  I have read
     /// that some boards with the TM1638 chip have multi-color LEDs in which case the mask might be
     /// used to control the color.  On my board the LEDs are all red so this isn't applicable.
-    pub async fn set_led_mask(&mut self, address: u8, mask: u8) {
-        self.set_fixed_addressing().await;
+    pub async fn set_led_mask(&mut self, address: u8, mask: u8) -> Result<(), Driver::Error> {
+        self.set_fixed_addressing().await?;
 
         self.apply_write_command(WriteCommand::WriteLed {
             led_number: address,
             mask,
         })
-        .await;
+        .await
     }
 
     /// Read the raw key bitmask from the controller
-    pub async fn read_keys(&mut self) -> Keys {
+    pub async fn read_keys(&mut self) -> Result<Keys, Driver::Error> {
         let mut buffer = [0u8; KEY_BYTES];
 
         self.apply_read_command(ReadCommand::ReadKeys, &mut buffer)
-            .await;
+            .await?;
 
         trace!("keys = {:?}", buffer);
 
-        Keys::new(buffer)
+        Ok(Keys::new(buffer))
     }
 
     /// Switch the chip to fixed addressing mode, so all write operations to whatever the current
     /// address is, with no automatic incrementing of the address.
-    async fn set_fixed_addressing(&mut self) {
+    async fn set_fixed_addressing(&mut self) -> Result<(), Driver::Error> {
         if self.inc_addressing_mode {
             self.apply_write_command(WriteCommand::SetFixedDisplayAddressing)
-                .await;
+                .await?;
             self.inc_addressing_mode = false;
         }
+
+        Ok(())
     }
 
     /// Switch the chip to incremental addressing mode, so each byte written will automatically
     /// increment the current address by one byte, which makes it much more convenient to write
     /// to multiple LEDs and 7-seg displays.
-    async fn set_incrementing_addressing(&mut self) {
+    async fn set_incrementing_addressing(&mut self) -> Result<(), Driver::Error> {
         if !self.inc_addressing_mode {
             self.apply_write_command(WriteCommand::SetIncrementalDisplayAddressing)
-                .await;
+                .await?;
             self.inc_addressing_mode = true;
         }
+
+        Ok(())
     }
 
     /// Apply the command to the controller
-    async fn apply_write_command<'c>(&mut self, command: WriteCommand<'c>) {
+    async fn apply_write_command<'c>(
+        &mut self,
+        command: WriteCommand<'c>,
+    ) -> Result<(), Driver::Error> {
         let (command_byte, data_bytes) = command.encode();
 
         trace!("command byte = {=u8:x}", command_byte);
 
         if let Some(data_bytes) = data_bytes {
             self.send_command_and_data_bytes(command_byte, data_bytes)
-                .await;
+                .await?;
         } else {
-            self.send_command_byte(command_byte).await;
+            self.send_command_byte(command_byte).await?;
         }
+
+        Ok(())
     }
 
-    async fn apply_read_command(&mut self, command: ReadCommand, read_buffer: &mut [u8]) {
+    async fn apply_read_command(
+        &mut self,
+        command: ReadCommand,
+        read_buffer: &mut [u8],
+    ) -> Result<(), Driver::Error> {
         let (command_byte, read_bytes) = command.encode();
 
         trace!("command byte = {=u8:x}", command_byte);
@@ -179,105 +174,29 @@ impl<'a, StrobePin: gpio::Pin, ClockPin: gpio::Pin, DioPin: gpio::Pin>
 
     /// Send a single byte that represents a command, so strobe will be pulled low
     /// before the command's bits are sent, and then pulled high again after.
-    async fn send_command_byte(&mut self, b: u8) {
-        self.strobe.set_low();
-        self.send_byte(b).await;
-        self.strobe.set_high();
+    async fn send_command_byte(&mut self, b: u8) -> Result<(), Driver::Error> {
+        self.driver.send_command(b).await
     }
 
     /// Send a single byte that represents a command followed by one or more data bytes, so strobe
     /// will be pulled low before the command's bits are sent, and not pulled high again
     /// until after the data bytes are sent.
-    async fn send_command_and_data_bytes(&mut self, cmd: u8, data: &[u8]) {
-        defmt::debug_assert!(!data.is_empty());
-        self.strobe.set_low();
-        self.send_byte(cmd).await;
-        for b in data {
-            trace!("data byte = {=u8:x}", b);
-            self.send_byte(*b).await;
-        }
-        self.strobe.set_high();
+    async fn send_command_and_data_bytes(
+        &mut self,
+        cmd: u8,
+        data: &[u8],
+    ) -> Result<(), Driver::Error> {
+        self.driver.send_command_write_data(cmd, data).await
     }
 
     /// Send a single byte that represents a command and which expects a response back from the
     /// controller, so strobe will be pulled low before the command's bits are sent, and then pulled high again after all bytes are read.
-    async fn send_command_byte_and_read(&mut self, b: u8, read_buffer: &mut [u8]) {
-        self.strobe.set_low();
-        self.send_byte(b).await;
-
-        // We will be reading from DIO
-        self.dio.set_as_input();
-
-        // Wait Twait interval before reading response
-        Timer::after(TWAIT).await;
-
-        trace!("Expecting {0} bytes from controller", read_buffer.len());
-
-        for byte in read_buffer.iter_mut() {
-            *byte = self.shift_byte_in().await;
-        }
-
-        // Done reading from DIO, put it back to output
-        self.dio.set_as_output();
-
-        self.strobe.set_high();
-    }
-
-    /// Send a single byte, maybe command maybe data this low level function doesn't care.
-    ///
-    /// Sends a bit at a time on the DIO pin
-    async fn send_byte(&mut self, b: u8) {
-        self.shift_byte_out(b).await;
-    }
-
-    /// Shift the byte value out on the DIO pin, LSB first, waiting an appropriate
-    /// period of time between clock pulses to ensure the TM1638 can keep up
-    ///
-    /// Assumes the DIO pin has already been set up as output
-    async fn shift_byte_out(&mut self, b: u8) {
-        for bit in 0..8 {
-            let mask = 1 << bit;
-            let value = (b & mask) != 0;
-
-            self.dio.set_state(value.into()).unwrap();
-
-            // XXX Experiment: the LA sometimes shows the clock going high within a few nano of the
-            // DIO pin going high.  It's not clear if the chip will read this as a 0 or a 1.  Try
-            // waiting a tick for the DIO pin to assume its state before bringing clock high.  The
-            // datasheet says data is read from DIO on the rising edge of CLK so this detail
-            // matters.
-            Timer::after(CLOCK_TICK).await;
-
-            self.clock.set_high();
-            Timer::after(CLOCK_TICK).await;
-            self.clock.set_low();
-            Timer::after(CLOCK_TICK).await;
-        }
-    }
-
-    /// Shift a byte value in from the DIO pin, LSB first, using the CLK pin to drive the
-    /// controller to send data.
-    ///
-    /// Assumes the DIO pin is already set up as input
-    async fn shift_byte_in(&mut self) -> u8 {
-        let mut value = 0;
-
-        for bit in 0..8 {
-            // Strobe clock HIGH to signal controller to read a bit
-            self.clock.set_high();
-            Timer::after(CLOCK_TICK).await;
-
-            let mask = 1 << bit;
-
-            if self.dio.get_level().into() {
-                value |= mask;
-            }
-
-            self.clock.set_low();
-            Timer::after(CLOCK_TICK).await;
-        }
-
-        value
+    async fn send_command_byte_and_read(
+        &mut self,
+        b: u8,
+        read_buffer: &mut [u8],
+    ) -> Result<(), Driver::Error> {
+        self.driver.send_command_read_data(b, read_buffer).await
     }
 }
 
@@ -286,6 +205,7 @@ impl<'a, StrobePin: gpio::Pin, ClockPin: gpio::Pin, DioPin: gpio::Pin>
 /// According to the datasheet, the controller supports a keypad arraged in a 3x8 matrix.  This
 /// struct makes it more egonomic to work with that matrix.
 #[derive(Clone)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub struct Keys([u8; KEY_BYTES]);
 
 impl Keys {
@@ -382,6 +302,7 @@ impl AsRef<[u8]> for Keys {
 
 /// The columns in the keyboard matrix that the TM1638 scans
 #[derive(Copy, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum KeyColumn {
     K1,
     K2,
@@ -440,6 +361,7 @@ impl KeyColumn {
 
 /// The rows in the keyboard matrix that the TM1638 scans
 #[derive(Copy, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum KeyRow {
     KS1,
     KS2,

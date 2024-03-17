@@ -4,44 +4,23 @@ edition.workspace = true
 version.workspace = true
 authors.workspace = true
 
+[features]
+default = ["defmt", "embassy-rp", "embassy-time"]
+
+# Enable defmt logging in the library, and implement `defmt::Format` on public types
+defmt = ["dep:defmt"]
+# Enable the bus driver implementation using Embassy on the Pi Pico
+embassy-rp = ["dep:embassy-rp"]
+
+# Enable the timer implementation using embassy-time
+embassy-time = ["dep:embassy-time"]
+
 [dependencies]
-cyw43 = { workspace = true }
-cyw43-pio = { workspace = true }
-embassy-embedded-hal = { workspace = true }
-embassy-executor = { workspace = true }
-embassy-futures = { workspace = true }
-embassy-net = { workspace = true }
-embassy-net-wiznet = { workspace = true }
-embassy-rp = { workspace = true }
-embassy-sync = { workspace = true }
-embassy-time = { workspace = true }
-embassy-usb = { workspace = true }
-embassy-usb-logger = { workspace = true }
-usbd-hid = { workspace = true }
+embassy-rp = { workspace = true, optional = true }
+embassy-time = { workspace = true, optional = true }
 
-defmt ={ workspace = true }
-defmt-rtt ={ workspace = true }
-fixed ={ workspace = true }
-fixed-macro ={ workspace = true }
-
-cortex-m = { workspace = true }
-cortex-m-rt ={ workspace = true }
-panic-probe = { workspace = true }
-futures = { workspace = true }
-heapless ={ workspace = true }
-
+defmt ={ workspace = true, optional = true}
 
 embedded-hal-1 = { workspace = true }
-embedded-hal-async ={ workspace = true }
-embedded-hal-bus = { workspace = true }
-embedded-io-async = { workspace = true }
-#embedded-storage = { workspace = true }
-static_cell ={ workspace = true }
-portable-atomic = { workspace = true }
-log ={ workspace = true }
-pio-proc ={ workspace = true }
-pio ={ workspace = true }
-rand = { workspace = true }
-either = { workspace = true }
 strum = { workspace = true }
 strum_macros ={ workspace = true }

@@ -5,7 +5,7 @@ version.workspace = true
 authors.workspace = true
 
 [dependencies]
-tm1638 = { path = "../../tm1638", version = "0.1.0" }
+tm1638 = { path = "../../tm1638", version = "0.1.0", features = ["embassy-rp", "embassy-time", "defmt"] }
 cyw43 = { workspace = true }
 cyw43-pio = { workspace = true }
 embassy-embedded-hal = { workspace = true }
