@@ -8,10 +8,14 @@ authors.workspace = true
 features = ["defmt", "embassy-rp", "embassy-time"]
 
 [features]
-default = ["defmt", "embassy-rp", "embassy-time"]
+default = ["defmt", "embassy-rp", "embassy-time", "ascii-font"]
 
 # Enable defmt logging in the library, and implement `defmt::Format` on public types
 defmt = ["dep:defmt"]
+
+# Embed a very primitive ASCII font to render ASCII chars using 7 seg (+ dot) displays
+ascii-font = []
+
 # Enable the bus driver implementation using Embassy on the Pi Pico
 embassy-rp = ["dep:embassy-rp"]
 

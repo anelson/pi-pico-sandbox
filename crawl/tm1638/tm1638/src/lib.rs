@@ -1,10 +1,13 @@
 #![no_std]
 
 mod bus;
+#[cfg(feature = "ascii-font")]
+mod font;
 mod keys;
 
 use core::marker::PhantomData;
 use core::num::NonZeroU8;
+use core::num::NonZeroUsize;
 
 pub use bus::*;
 pub use keys::*;
@@ -251,6 +254,37 @@ impl<Driver: BusDriver> Tm1638<Driver> {
         }
 
         Ok(())
+    }
+
+    /// Write some short text to the SEG1-SEG8 pins of multiple GRID pins, assuming that those SEG
+    /// pins are connected to 7-segment displays according to the recommentation in the data sheet.
+    ///
+    /// Renders ASCII characters to a primitive kind of font that will be sort of readable on a 7
+    /// segment display.
+    ///
+    /// Use `max_chars` to render just part of the display memory.
+    #[cfg(feature = "ascii-font")]
+    pub async fn set_grid_lower_bytes_text(
+        &mut self,
+        start_display_address: u8,
+        max_chars: Option<NonZeroUsize>,
+        text: &str,
+    ) -> Result<(), Driver::Error> {
+        // The controller can only drive up to 8 7-seg displays, so we need no more than 8 bytes
+        // for this.
+
+        let mut bytes = [0u8; 8];
+
+        font::render_text(text, &mut bytes[..]);
+
+        // Clamp the rendered text if needed
+        let data = if let Some(max_chars) = max_chars {
+            &bytes[0..max_chars.get()]
+        } else {
+            &bytes[..]
+        };
+
+        self.set_grid_lower_bytes(start_display_address, data).await
     }
 
     /// Write multiple bytes of arbitrary data to the display memory.

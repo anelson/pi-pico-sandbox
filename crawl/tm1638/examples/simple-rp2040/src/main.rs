@@ -37,7 +37,10 @@ async fn main(_spawner: Spawner) {
                 // Illuminate the LEDs for any rows that have a pressed key in them
                 // On the TM1638 board I have, each of the 8 switches is wired into a different row
                 // so this works well.
-                tm1638.set_grid_upper_byte(row, bitmask & 0x01).await.unwrap();
+                tm1638
+                    .set_grid_upper_byte(row, bitmask & 0x01)
+                    .await
+                    .unwrap();
 
                 if bitmask & 0x01 != 0 {
                     tm1638.set_grid_lower_byte(row, 0b0011_1111).await.unwrap();
@@ -63,6 +66,11 @@ async fn main(_spawner: Spawner) {
                 // number
                 //tm1638.set_display_mask(row - 1, col).await.unwrap();
             }
+        } else {
+            tm1638
+                .set_grid_lower_bytes_text(0, None, "FAFO BCH!")
+                .await
+                .unwrap();
         }
 
         Timer::after_millis(10).await;
