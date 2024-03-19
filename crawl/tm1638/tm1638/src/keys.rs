@@ -68,6 +68,63 @@ impl Keys {
         bitmask
     }
 
+    /// Helper specifically for the Handsontec MDU1093 board, which includes the TD1638 controller,
+    /// 8 7-segment displays, 8 LEDs, and 8 pushbuttons switches.
+    ///
+    /// According to the datasheet for that board (included in the code repo), the switches are
+    /// connected to the key inputs in a somewhat confusing way:
+    ///
+    /// S1 -> SEG1/KS1
+    /// S2 -> SEG3/KS3
+    /// S3 -> SEG5/KS5
+    /// S4 -> SEG7/KS7
+    /// S5 -> SEG2/KS2
+    /// S6 -> SEG4/KS4
+    /// S7 -> SEG6/KS6
+    /// S8 -> SEG8/KS8
+    ///
+    /// The datasheet doesn't provide a hint as to why that is, but it makes it a bit inconvenient
+    /// to write code for the board that responds to the switches.
+    ///
+    /// This helper function wraps [`rows_bitmask`] and re-arranges the results, so that bit 0
+    /// corresponds to S1, bit 1 is S2, etc.
+    ///
+    /// This has the nice property that if you take this return value and use it to set or clear
+    /// the LEDs based on the bits, you'll light up or turn off the LED that corresponds to each
+    /// switch.
+    #[allow(clippy::identity_op)] // The shifts by 0 bits are no-ops but I keep them in here to make the code more clear
+    pub fn mdu1093_rows_bitmask(&self) -> u8 {
+        // On the board the switches are mounted in a line with labels like this:
+        //
+        // S1  S2  S3  S4  S5  S6  S7  S8
+        //
+        // but because of the way they are wired, they map the rows like this:
+        //
+        // KS1 KS3 KS5 KS7 KS2 KS4 KS6 KS8
+        //
+        // Note that all 4 odd-numbered KS ports are mapped to the first four switches, followed by
+        // all four even numbered KS ports to the last four switches.
+        let bitmask = self.rows_bitmask();
+
+        let s1 = bitmask & 0b0000_0001; // KS1 -> S1
+        let s5 = bitmask & 0b0000_0010; // KS2 -> S5
+        let s2 = bitmask & 0b0000_0100; // KS3 -> S2
+        let s6 = bitmask & 0b0000_1000; // KS4 -> S6
+        let s3 = bitmask & 0b0001_0000; // KS5 -> S3
+        let s7 = bitmask & 0b0010_0000; // KS6 -> S7
+        let s4 = bitmask & 0b0100_0000; // KS7 -> S4
+        let s8 = bitmask & 0b1000_0000; // KS8 -> S8
+
+        (s1 >> 0)
+            | (s2 >> 1)
+            | (s3 >> 2)
+            | (s4 >> 3)
+            | (s5 << 3)
+            | (s6 << 2)
+            | (s7 << 1)
+            | (s8 << 0)
+    }
+
     /// If at least one key is indicated as pressed, return that key's column and row, and update
     /// the key state so that key is no longer indicated as pressed.
     ///
@@ -223,23 +280,37 @@ impl KeyRow {
 
     /// Given the key bytes, extract the 4 bit nibble that corresponds to this row
     fn extract_row_nibble_from_bytes(&self, keys: &[u8; KEY_BYTES]) -> u8 {
+        let (byte_index, bit_index) = self.to_byte_and_bit_index();
+
+        // Each byte contains two rows' of nibbles
+        // But byte indexes are 0 based while row numbers are 1-based
+        let byte = keys[byte_index as usize];
+
+        (byte >> bit_index) & 0x0f
+    }
+
+    /// Get the 0-based byte index and 0-based bit index where the 4-bit nibble containing this
+    /// row's column values is located.
+    ///
+    /// See section 8 (VIII) of the data sheet for the source of this logic.
+    fn to_byte_and_bit_index(&self) -> (u8, u8) {
         // Section 8 in the datasheet has a table showing which nibbles of which bytes correspond
         // to which rows
         let row: u8 = self.to_row_number();
 
-        // Each byte contains two rows' of nibbles
-        // But byte indexes are 0 based while row numbers are 1-based
-        let byte = keys[((row - 1) / 2) as usize];
+        let byte_index = (row - 1) / 2;
 
         // Even-numbered rows (1-based) are in the high nibble; odd numbered rows are in the low
         // nibble
-        if row % 2 == 0 {
+        let bit_index = if row % 2 == 0 {
             // Even numbered row
-            byte >> 4
+            4
         } else {
             // Odd numbered row
-            byte & 0x0f
-        }
+            0
+        };
+
+        (byte_index, bit_index)
     }
 
     /// Construct a row from a 0-based byte index and a 0-based bit index.
@@ -370,5 +441,104 @@ mod tests {
         // set bits
         let keys = Keys::new([0b1000_1000u8; KEY_BYTES]);
         assert_eq!(0, keys.count());
+    }
+
+    #[test]
+    fn each_row_key_pressed() {
+        // For each bit set in the input, verify we translate it to the right bit corresponding to
+        // the switches on the MDU1093 board, as well as the standard mapping of KS to bit.
+        struct TestCase {
+            key_row: KeyRow,
+            std_bit_number: u8,
+            mdu1093_bit_number: u8,
+        }
+
+        const TEST_CASES: &[TestCase] = &[
+            TestCase {
+                key_row: KeyRow::KS1,
+                std_bit_number: 0,
+                // S1
+                mdu1093_bit_number: 0,
+            },
+            TestCase {
+                key_row: KeyRow::KS2,
+                std_bit_number: 1,
+                // S5
+                mdu1093_bit_number: 4,
+            },
+            TestCase {
+                key_row: KeyRow::KS3,
+                std_bit_number: 2,
+                // S2
+                mdu1093_bit_number: 1,
+            },
+            TestCase {
+                key_row: KeyRow::KS4,
+                std_bit_number: 3,
+                // S6
+                mdu1093_bit_number: 5,
+            },
+            TestCase {
+                key_row: KeyRow::KS5,
+                std_bit_number: 4,
+                // S3
+                mdu1093_bit_number: 2,
+            },
+            TestCase {
+                key_row: KeyRow::KS6,
+                std_bit_number: 5,
+                // S7
+                mdu1093_bit_number: 6,
+            },
+            TestCase {
+                key_row: KeyRow::KS7,
+                std_bit_number: 6,
+                // S4
+                mdu1093_bit_number: 3,
+            },
+            TestCase {
+                key_row: KeyRow::KS8,
+                std_bit_number: 7,
+                // S8
+                mdu1093_bit_number: 7,
+            },
+        ];
+
+        for tc in TEST_CASES {
+            let TestCase {
+                key_row,
+                std_bit_number,
+                mdu1093_bit_number,
+            } = tc;
+
+            // Make a keys array with column 1 of this key row set
+            let mut keys = [0u8; KEY_BYTES];
+            let (byte_index, bit_index) = key_row.to_byte_and_bit_index();
+
+            // There are three bits for the three columns in each row.  We can set them all, it
+            // doesn't matter; only one column has to be set for each row in order for
+            // `rows_bitmask` to set the bit for that row.
+            keys[byte_index as usize] = 0b0000_0001 << bit_index;
+
+            let keys = Keys::new(keys);
+
+            // This should report only one key pressed; Column 3 of the test row
+            // Why column 3?  Because, confusingly, the least significant bit of the row's nibble
+            // corresponds to K3, followed by K2 in the next bit, and K1 after that.
+            //
+            // On the MDU1093 board, all of the switches are wired into column K3
+            assert_eq!(Some((KeyColumn::K3, *key_row)), keys.clone().next());
+            assert_eq!(1, keys.clone().count());
+
+            let rows_bitmask = keys.rows_bitmask();
+
+            assert_eq!(rows_bitmask, (1 << std_bit_number),
+                    "Rows bitmask {rows_bitmask:b} doesn't reflect pressed keys in row {key_row:?}; expected result to appear in bit {std_bit_number}");
+
+            let rows_bitmask = keys.mdu1093_rows_bitmask();
+
+            assert_eq!(rows_bitmask, (1 << mdu1093_bit_number),
+                    "MDU1093 Rows bitmask {rows_bitmask:b} doesn't reflect pressed keys in row {key_row:?}; expected result to appear in bit {mdu1093_bit_number}");
+        }
     }
 }

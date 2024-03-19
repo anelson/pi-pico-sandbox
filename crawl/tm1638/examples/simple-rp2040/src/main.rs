@@ -33,7 +33,7 @@ async fn main(_spawner: Spawner) {
             // Go apeshit
             tm1638.activate_display(0x07).await.unwrap();
 
-            let mut bitmask = keys.rows_bitmask();
+            let mut bitmask = keys.mdu1093_rows_bitmask();
 
             for row in 0..8 {
                 // Illuminate the LEDs for any rows that have a pressed key in them
