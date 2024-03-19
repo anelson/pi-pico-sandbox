@@ -34,7 +34,7 @@ impl Keys {
     pub fn is_pressed(&self, col: KeyColumn, row: KeyRow) -> bool {
         let nibble = row.extract_row_nibble_from_bytes(&self.0);
         #[cfg(feature = "defmt")]
-        defmt::debug!("nibble={=u8}", nibble);
+        defmt::trace!("nibble={=u8}", nibble);
 
         col.extract_value_from_row_nibble(nibble)
     }

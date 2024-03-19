@@ -152,9 +152,9 @@ impl<Driver: BusDriver> Tm1638<Driver> {
         // Put the controller in incremental addressing mode and initialize all 7-segment displays to be blank
         self.set_incrementing_addressing().await?;
 
-        self.apply_write_command(WriteCommand::WriteMultipleChars {
-            start_display_number: 0,
-            segment_masks: INITIAL_DISPLAY_STATE,
+        self.apply_write_command(WriteCommand::WriteDisplayBytes {
+            start_display_address: 0,
+            display_data: INITIAL_DISPLAY_STATE,
         })
         .await
     }
@@ -173,39 +173,113 @@ impl<Driver: BusDriver> Tm1638<Driver> {
             .await
     }
 
-    /// Set a specific 7-segment display identified by `address` (`0` is the left-most display, max
-    /// value is 7), to the value `mask`.
+    /// Set the value of SEG1-SEG8 for a given GRID value.
     ///
-    /// `mask` is a bitmask in which the least significant 7 bits correspond to segments on the
-    /// display, and the most significant bit corresponds to the `.` in the bottom right of the
-    /// display.
+    /// The datasheet in section 7 has a diagram showing the recommended mapping of `SEG` output
+    /// pins to actual segments in the display.  This mapping is used on the MDU1093 board that I
+    /// tested with.  But obviously another implementation is free to wire things up differently.
     ///
-    /// This uses the relative addressing mode of the TM1638.  To replace the entire contents of
-    /// the display use `[XXX]`.
-    pub async fn set_display_mask(&mut self, address: u8, mask: u8) -> Result<(), Driver::Error> {
+    /// On the MDU1093 board and maybe others, these pins are wired to 7-segment displays, one
+    /// digit for each of 8 GRID pins.  Other implementations might use all 10 SEG pins to control
+    /// a 9 segment display or some other output device, in which case use [`set_grid_upper_byte`]
+    /// or the lower level [`write_display_data`] functions.
+    ///
+    /// Every bit in `value` corresponds to a SEG pin.  Bit 0 is SEG1, bit 1 is SEG2, etc.
+    pub async fn set_grid_lower_byte(&mut self, grid: u8, value: u8) -> Result<(), Driver::Error> {
         self.set_fixed_addressing().await?;
 
-        self.apply_write_command(WriteCommand::WriteSingleChar {
-            display_number: address,
-            segment_mask: mask,
+        self.apply_write_command(WriteCommand::WriteDisplayByte {
+            // Translate the address of the 7-segment display to a memory address
+            // Between each 7-seg display there's a byte for controlling the SEG9 and SEG10 pins, so to
+            // translate this we multiply the address by 2
+            display_address: grid * 2,
+            display_data: value,
         })
         .await
     }
 
-    /// Set the mask for an LED output for a specific LED by `address`.
+    /// Set the value of SEG9-SEG10 for a given GRID value.
     ///
-    /// `0` is the left-most LED on the board I have; `7` is the right-most.
+    /// Only the lower two bits of `value` are used.
     ///
-    /// `mask` controls the SEGMENT9 and SEGMENT10 outputs that for the GRID pin correspondign to
-    /// `address`.  Therefore only the two least significant bits of `mask` are used.  I have read
-    /// that some boards with the TM1638 chip have multi-color LEDs in which case the mask might be
-    /// used to control the color.  On my board the LEDs are all red so this isn't applicable.
-    pub async fn set_led_mask(&mut self, address: u8, mask: u8) -> Result<(), Driver::Error> {
+    /// On the MDU1093 board, SEG9 is connected to a separate red LED For each GRID pin.
+    /// Supposedly there are other boards that use both SEG9 and SEG10 on multi-color LEDs to allow
+    /// control of the LED color.  Other applications could use these pins for anything else.
+    pub async fn set_grid_upper_byte(&mut self, grid: u8, value: u8) -> Result<(), Driver::Error> {
         self.set_fixed_addressing().await?;
 
-        self.apply_write_command(WriteCommand::WriteLed {
-            led_number: address,
-            mask,
+        self.apply_write_command(WriteCommand::WriteDisplayByte {
+            // We want to control the SEG9 and SEG10 pins for the specified GRID pin, so we need to
+            // multiple the addres by 2 and add 1
+            display_address: grid * 2 + 1,
+            display_data: value,
+        })
+        .await
+    }
+
+    /// Set the values of one or more sets of SEG1-SEG8 pins connected to contiguous GRID pins.
+    ///
+    /// Each byte in `digits` is a bitmask, where each bit corresponds to a segment pin from SEG1
+    /// to SEG8.
+    /// For the purposes of this function, bit N of each byte in `digits` corresponds to the SEGN
+    /// bit on the controller.
+    ///
+    /// `grid` should be 0 to start the output on the first digit (GRID1), 1 to start at
+    /// the second digit (GRID2), etc.
+    ///
+    /// This is just a convenience function for calling [`set_grid_upper_byte`] for multiple GRID
+    /// values at a time.
+    pub async fn set_grid_lower_bytes(
+        &mut self,
+        grid: u8,
+        values: &[u8],
+    ) -> Result<(), Driver::Error> {
+        defmt::debug_assert!(grid < 8);
+
+        // Recall from the datasheet that the address of the SEG1-SEG8 pins is right before the
+        // address for the SEG9 and SEG10 pins for the same GRID pin.  This means that if you want
+        // to write to multiple 7-segment displays connected to SEG1-SEG8, and not to separate LEDs
+        // connected to SEG9 and SEG10 (on the MDU1093 board SEG9 is a red LED and SEG10 is not
+        // used), you have to skip every other byte.
+        //
+        // For this reason WriteMultipleChars is not very useful except to clear the entire display
+        // at the beginning.
+        self.set_fixed_addressing().await?;
+
+        for (index, digit) in values.into_iter().enumerate() {
+            self.set_grid_lower_byte(grid + index as u8, *digit).await?;
+        }
+
+        Ok(())
+    }
+
+    /// Write multiple bytes of arbitrary data to the display memory.
+    ///
+    /// Unlike the helper functions [`set_grid_lower_byte`] and [`set_grid_upper_byte`], this does
+    /// not perform any translation of the data being written.  Writes will start at
+    /// `start_display_address` and be written contiguously to the controller's display memory for
+    /// `data.len()` bytes.  Due to the layout of the display memory, this will control SEG1-SEG8
+    /// pins or SEG9-SEG10 pins or both, depending on the address.
+    ///
+    /// Refer to the map of display memory in section 7 of the data sheet to understand how this
+    /// will actually work.
+    ///
+    /// This is considerably more efficient than writing a byte at a time, at the expense of being
+    /// more complex for the caller to manage.
+    pub async fn write_display_data(
+        &mut self,
+        start_display_address: u8,
+        data: &[u8],
+    ) -> Result<(), Driver::Error> {
+        defmt::debug_assert!(16 < 8);
+
+        // There's an optimized scheme for "bulk" transfer of data to the controller, but it has to
+        // be activated before we perform the write.
+        self.set_incrementing_addressing().await?;
+
+        self.apply_write_command(WriteCommand::WriteDisplayBytes {
+            start_display_address,
+            display_data: data,
         })
         .await
     }
@@ -338,46 +412,39 @@ enum WriteCommand<'a> {
     /// targeted directly, with the target address remaining fixed unless explicitly changed.
     SetFixedDisplayAddressing,
 
-    /// Set the address of the display that will be written to and set the segment enablement mask
-    /// for that display.
+    /// Write a single byte to an address in display memory.
+    ///
+    /// See section 6 of the data sheet for a map of the display memory and what combination of
+    /// GRID and SEG pins each bit of that memory corresponds to.
+    ///
     /// In incremental write mode, after writing a byte the display address is automatically
     /// incremented.  In fixed write mode, all written data goes to this same address until changed
     /// This command can be used in either mode.
-    WriteLed {
-        /// The LED to write to.  There are 8 LEDs on the board I have
-        led_number: u8,
+    WriteDisplayByte {
+        /// The display address to write to.
+        display_address: u8,
 
-        /// The bit mask controlling which segments on the display are illuminated
-        /// According to the data sheet, only the two least significant bits are used to control
-        /// the LED.
-        mask: u8,
+        /// The byte to write to this address.  This will control the value of either the SEG1-SEG8
+        /// pins, or the SEG9-SEG10 pins, and some GRID pin, depending upon what display address
+        /// was written
+        display_data: u8,
     },
-    /// Set the address of the display that will be written to and set the segment enablement mask
-    /// for that display.
-    /// In incremental write mode, after writing a byte the display address is automatically
-    /// incremented.  In fixed write mode, all written data goes to this same address until changed
-    /// This command can be used in either mode.
-    WriteSingleChar {
-        /// The initial number of the segment to write to.
-        display_number: u8,
-
-        /// The bit mask controlling which segments on the display are illuminated
-        segment_mask: u8,
-    },
-    /// Set the address of the display that will be written to, and write one or more segment
-    /// enablement masks.
+    /// Write multiple bytes to display memory, at a specific start address
+    ///
+    /// See section 6 of the data sheet for a map of the display memory and what combination of
+    /// GRID and SEG pins each bit of that memory corresponds to.
+    ///
     /// In incremental write mode, after writing a byte the display address is automatically
     /// incremented.
     /// Use this only with incremental display addressing mode.
-    WriteMultipleChars {
-        /// The number of the first display to write to.  So a value of `1` means the first segment, `2` the second segment, etc.
-        ///
+    WriteDisplayBytes {
+        /// The starting address to write to.
         /// Since this is valid only with incremental addressing mode, each byte is written to the
-        /// next display in order, wrapping around to 1
-        start_display_number: u8,
+        /// next display in order, wrapping around to 0
+        start_display_address: u8,
 
         /// Segment masks for the display(s) being written to.
-        segment_masks: &'a [u8],
+        display_data: &'a [u8],
     },
 }
 
@@ -418,42 +485,23 @@ impl<'a> WriteCommand<'a> {
                 // Per section 5.1 in the data sheet
                 (0b0100_0100, None)
             }
-            WriteCommand::WriteLed { led_number, mask } => {
-                // Section 5.2 in the data sheet shows how to set the address
-                // Section 9.2 shows how addressing works in fixed mode.  9.1 shows incremental
-                // mode
-                //
-                // The 7 segments displays are at odd numbered offsets (ie, first LED is at
-                // byte 1, second display is at byte 3).  This is because the LEDs and the
-                // 7-segment displays share the same address range
-                #[cfg(feature = "defmt")]
-                defmt::debug_assert!(*led_number < 0b1_0000);
-                (
-                    0b1100_0000 | (((led_number << 1) + 1) & 0b0000_1111),
-                    Some(core::slice::from_ref(mask)),
-                )
-            }
-            WriteCommand::WriteSingleChar {
-                display_number,
-                segment_mask,
+            WriteCommand::WriteDisplayByte {
+                display_address,
+                display_data,
             } => {
                 // Section 5.2 in the data sheet shows how to set the address
                 // Section 9.2 shows how addressing works in fixed mode.  9.1 shows incremental
                 // mode
-                //
-                // The 7 segments displays are at even numbered offsets (ie, first display is at
-                // byte 0, second display is at byte 2).  The odd numbered offsets set the
-                // SEGMENT9 and SEGMENT10 pins which control the LEDs on the board.
                 #[cfg(feature = "defmt")]
-                defmt::debug_assert!(*display_number < 0b1_0000);
+                defmt::debug_assert!(*display_address < 0b1_0000);
                 (
-                    0b1100_0000 | ((display_number << 1) & 0b0000_1111),
-                    Some(core::slice::from_ref(segment_mask)),
+                    0b1100_0000 | (display_address & 0b0000_1111),
+                    Some(core::slice::from_ref(display_data)),
                 )
             }
-            WriteCommand::WriteMultipleChars {
-                start_display_number,
-                segment_masks,
+            WriteCommand::WriteDisplayBytes {
+                start_display_address: start_display_number,
+                display_data: segment_masks,
             } => {
                 // This works just like the `WriteSingleChar` command, except we assume the
                 // controller is in incremental addressing mode, and send multiple bytes after the

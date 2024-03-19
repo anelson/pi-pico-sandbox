@@ -25,21 +25,25 @@ async fn main(_spawner: Spawner) {
     tm1638.init().await.unwrap();
 
     debug!("Hello!  Press one of the buttons on the board!");
+    tm1638.activate_display(0x07).await.unwrap();
 
     loop {
         let keys = tm1638.read_keys().await.unwrap();
 
         if keys.any_pressed() {
-            // Go apeshit
-            tm1638.activate_display(0x07).await.unwrap();
-
             let mut bitmask = keys.mdu1093_rows_bitmask();
 
             for row in 0..8 {
                 // Illuminate the LEDs for any rows that have a pressed key in them
                 // On the TM1638 board I have, each of the 8 switches is wired into a different row
                 // so this works well.
-                tm1638.set_led_mask(row, bitmask & 0x01).await.unwrap();
+                tm1638.set_grid_upper_byte(row, bitmask & 0x01).await.unwrap();
+
+                if bitmask & 0x01 != 0 {
+                    tm1638.set_grid_lower_byte(row, 0b0011_1111).await.unwrap();
+                } else {
+                    tm1638.set_grid_lower_byte(row, 0b0000_0000).await.unwrap();
+                }
                 bitmask >>= 1;
             }
 
