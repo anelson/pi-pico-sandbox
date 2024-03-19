@@ -1,9 +1,9 @@
 [workspace]
 members = [
     "tm1638",
-     "examples/hello"
+     "examples/simple-rp2040"
 ]
-default-members = ["examples/hello"]
+default-members = ["examples/simple-rp2040"]
 resolver = "2"
 
 [workspace.package]

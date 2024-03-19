@@ -52,9 +52,9 @@ async fn main(_spawner: Spawner) {
 
                 debug!("col {}, row {}", col, row);
 
-                let col: u8 = col.to_column_number();
-                let row: u8 = row.to_row_number();
-
+                //let col: u8 = col.to_column_number();
+                //let row: u8 = row.to_row_number();
+                //
                 // Set the display corresponding to the row to a mask corresponding to the column
                 // number
                 //tm1638.set_display_mask(row - 1, col).await.unwrap();

@@ -1,5 +1,5 @@
 [package]
-name = "hello"
+name = "simple-rp2040"
 edition.workspace = true
 version.workspace = true
 authors.workspace = true
